@@ -12,10 +12,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
-import org.springframework.web.reactive.function.client.*;
+import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
+import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.resources.ConnectionProvider;
+import reactor.util.context.ContextView;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -32,32 +34,33 @@ public class WebClientConfig {
     public WebClient webClient() {
         return WebClient.
                 builder().
-                filter(this::logRequest).
+                filter(this.logRequest()).
                 filter(this.logResponse()).
                 clientConnector(new ReactorClientHttpConnector(this.httpClient())).
                 build();
     }
 
-    private Mono<ClientResponse> logRequest(ClientRequest request, ExchangeFunction next) {
-        return Mono.deferContextual(contextView -> {
-                    String uuid = contextView.get("UUID");
-                    return Mono.just(StringUtils.isEmpty(uuid) ? UUID.randomUUID().toString() : uuid);
-                }
-        ).flatMap(uuid -> {
-            log.info("[{}] Request: {} {}", uuid, request.method(), request.url());
-            request.headers().forEach((name, values) -> values.forEach(value -> log.info("[{}] {}={}", uuid, name, value)));
-            return next.exchange(request);
-        });
-    }
-
-
     private ExchangeFilterFunction logResponse() {
-        return ExchangeFilterFunction.ofResponseProcessor(clientResponse -> {
-            clientResponse.headers().asHttpHeaders().forEach((name, values) -> values.forEach(value -> log.info("{}={}", name, value)));
-            return Mono.just(clientResponse);
-        });
+        return ExchangeFilterFunction.ofResponseProcessor(clientResponse ->
+                Mono.deferContextual(this::logContext).flatMap(uuid -> {
+                    clientResponse.headers()
+                            .asHttpHeaders()
+                            .forEach((name, values) -> values.forEach(value -> log.info("[{}] Response header: {}={}", uuid, name, value)));
+                    return Mono.just(clientResponse);
+                })
+        );
     }
 
+    private ExchangeFilterFunction logRequest() {
+        return ExchangeFilterFunction.ofRequestProcessor(request ->
+                Mono.deferContextual(this::logContext).flatMap(uuid -> {
+                            log.info("[{}] Request: {} {}", uuid, request.method(), request.url());
+                            request.headers().forEach((name, values) -> values.forEach(value -> log.info("[{}] Request header: {}={}", uuid, name, value)));
+                            return Mono.just(request);
+                        }
+                )
+        );
+    }
 
     @Bean
     public ObjectMapper objectMapper() {
@@ -87,5 +90,10 @@ public class WebClientConfig {
                 .maxLifeTime(Duration.ofMillis(8_000L))
                 .metrics(true)
                 .build();
+    }
+
+    private Mono<String> logContext(ContextView contextView) {
+        String uuid = contextView.get("UUID");
+        return Mono.just(StringUtils.isEmpty(uuid) ? UUID.randomUUID().toString() : uuid);
     }
 }
