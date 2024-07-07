@@ -1,4 +1,4 @@
-package com.tusdatos.ds;
+package com.tusdatos.ds.response;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
